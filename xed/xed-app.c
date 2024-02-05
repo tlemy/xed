@@ -1016,6 +1016,8 @@ window_delete_event (XedWindow *window,
             return TRUE;
     }
 
+    xed_commands_file_save_session (window);
+
     _xed_cmd_file_quit (NULL, window);
 
     /* Do not destroy the window */

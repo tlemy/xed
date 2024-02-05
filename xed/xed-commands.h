@@ -15,6 +15,8 @@ void xed_commands_save_document (XedWindow *window, XedDocument *document);
 void xed_commands_save_document_async (XedDocument *document, XedWindow *window, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
 gboolean xed_commands_save_document_finish (XedDocument *document, GAsyncResult *result);
 void xed_commands_save_all_documents (XedWindow *window);
+void xed_commands_file_restore_session (XedWindow *window);
+void xed_commands_file_save_session (XedWindow *window);
 
 /*
  * Non-exported functions

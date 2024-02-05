@@ -52,6 +52,7 @@
 #define XED_IS_QUITTING             "xed-is-quitting"
 #define XED_IS_QUITTING_ALL     "xed-is-quitting-all"
 #define XED_SESSION_FILE_NAME   ".xed-session-save"
+#define XED_SESSION_MAX_NUM_FILES 99
 
 static void tab_state_changed_while_saving (XedTab    *tab,
                                             GParamSpec  *pspec,
@@ -1379,31 +1380,41 @@ _xed_cmd_file_revert (GtkAction   *action,
 }
 
 GFileOutputStream *
-xed_session_get_output_stream ()
+get_output_stream_xed_session ()
 {
     gchar *file_name = NULL;
-    GFile *session_file = NULL;
+    GFile *location = NULL;
     GFileOutputStream *ostream = NULL;
 
     file_name = g_strconcat (g_get_home_dir(), "/", XED_SESSION_FILE_NAME, NULL);
-    session_file = g_file_new_for_path (file_name);
-    ostream = g_file_replace (session_file, NULL, 0, 0, NULL, NULL);
 
-    g_free (file_name);
-    g_object_unref (session_file);
+    if (file_name != NULL)
+    {
+        location = g_file_new_for_path (file_name);
+        g_free (file_name);
+    }
+
+    if (location != NULL)
+    {
+        ostream = g_file_replace (location, NULL, 0, 0, NULL, NULL);
+        g_object_unref (location);
+    }
 
     return ostream;
 }
 
 static void
-xed_session_save_file_paths (GList *docs, GFileOutputStream* ostream)
+save_files_xed_session (GList *docs, GFileOutputStream* ostream)
 {
     XedDocument *doc = NULL;
     GtkSourceFile *source_file = NULL;
     GFile *location = NULL;
     gchar *file_path = NULL;
     gchar *file_path_list = NULL;
-    gssize written, to_write;
+    gssize to_write;
+
+    g_return_if_fail (ostream != NULL);
+    g_return_if_fail (docs != NULL);
 
     for (GList *l = docs; l != NULL; l = g_list_next (l))
     {
@@ -1418,34 +1429,143 @@ xed_session_save_file_paths (GList *docs, GFileOutputStream* ostream)
         }
     }
 
-    to_write = sizeof (gchar) * strlen (file_path_list);
-    written = g_output_stream_write (G_OUTPUT_STREAM (ostream), file_path_list, to_write, NULL, NULL);
-
-    g_output_stream_close (G_OUTPUT_STREAM (ostream), NULL, NULL);
-    g_object_unref (location);
-    g_free (file_path);
-    g_free (file_path_list);
-    g_return_if_fail (to_write == written);
+    if (location != NULL) g_object_unref (location);
+    if (file_path != NULL) g_free (file_path);
+    if (file_path_list != NULL)
+    {
+        to_write = sizeof (gchar) * strlen (file_path_list);
+        g_output_stream_write (G_OUTPUT_STREAM (ostream), file_path_list, to_write, NULL, NULL);
+        g_output_stream_close (G_OUTPUT_STREAM (ostream), NULL, NULL);
+        g_free (file_path_list);
+    }
 }
 
-static void
-xed_session_save_path_active_docs (XedWindow *window)
+void
+xed_commands_file_save_session (XedWindow *window)
 {
     GFileOutputStream* ostream = NULL;
     GList *docs = NULL;
 
     g_return_if_fail (XED_IS_WINDOW (window));
 
-    ostream = xed_session_get_output_stream ();
+    ostream = get_output_stream_xed_session ();
     docs = xed_window_get_documents (window);
 
-    g_return_if_fail (ostream != NULL);
-    g_return_if_fail (docs != NULL);
+    if (ostream != NULL)
+    {
+        save_files_xed_session(docs, ostream);
+        g_object_unref(ostream);
+    }
 
-    xed_session_save_file_paths (docs, ostream);
+    if (docs != NULL) g_list_free(docs);
+}
 
-    g_object_unref (ostream);
-    g_list_free (docs);
+GFileInputStream *
+get_input_stream_xed_session ()
+{
+    gchar *file_name = NULL;
+    GFile *location = NULL;
+    GFileInputStream *stream = NULL;
+
+    file_name = g_strconcat (g_get_home_dir(), "/", XED_SESSION_FILE_NAME, NULL);
+
+    if (file_name != NULL)
+    {
+        location = g_file_new_for_path (file_name);
+        g_free (file_name);
+    }
+
+    if (location != NULL)
+    {
+        stream = g_file_read (location, NULL, NULL);
+        g_object_unref (location);
+    }
+
+    return stream;
+}
+
+static GSList*
+get_locations_xed_session (char *buffer)
+{
+    gchar **paths = NULL;
+    GFile *location = NULL;
+    gchar *file_name = NULL;
+    GSList* locations = NULL;
+
+    g_return_val_if_fail (buffer != NULL, NULL);
+
+    // The string is split into 100 parts
+    // The first 99 are the files that will be opened
+    // The 100th element will hold the remaining characters
+    paths = g_strsplit_set (buffer, "\n", XED_SESSION_MAX_NUM_FILES + 1);
+
+    for (size_t i = 0; i < XED_SESSION_MAX_NUM_FILES; i++)
+    {
+        if (paths[i] == NULL) break;
+
+        file_name = g_strconcat (paths[i], NULL);
+        location = g_file_new_for_path (file_name);
+
+        if (location != NULL && g_file_query_exists (location, NULL))
+        {
+            locations = g_slist_prepend (locations, location);
+        }
+    }
+
+    if (location != NULL) g_object_unref (location);
+    if (file_name != NULL) g_free (file_name);
+
+    return locations;
+}
+
+static void
+open_files_xed_session (XedWindow *window, GFileInputStream* istream)
+{
+    GSList *locations = NULL;
+    char *buffer = NULL;
+    gssize result;
+
+    g_return_if_fail (XED_IS_WINDOW (window));
+    g_return_if_fail (istream != NULL);
+
+    buffer = (char *) malloc (PATH_MAX * XED_SESSION_MAX_NUM_FILES);
+
+    if (buffer != NULL)
+    {
+        result = g_input_stream_read (
+            G_INPUT_STREAM (istream),
+            (void *) buffer,
+            PATH_MAX * XED_SESSION_MAX_NUM_FILES,
+            NULL, NULL);
+    }
+
+    if (result != -1)
+    {
+        locations = get_locations_xed_session (buffer);
+        g_free (buffer);
+    }
+
+    if (locations != NULL)
+    {
+        xed_commands_load_locations (window, locations, NULL, 0);
+        g_slist_free (locations);
+    }
+}
+
+void
+xed_commands_file_restore_session (XedWindow *window)
+{
+    GFileInputStream* istream = NULL;
+
+    g_return_if_fail (XED_IS_WINDOW (window));
+
+    istream = get_input_stream_xed_session ();
+
+    if (istream != NULL)
+    {
+        open_files_xed_session (window, istream);
+        g_object_unref (istream);
+    }
 }
 
 static void
@@ -1892,8 +2012,6 @@ _xed_cmd_file_quit (GtkAction *action,
                         (XED_WINDOW_STATE_SAVING |
                          XED_WINDOW_STATE_PRINTING |
                          XED_WINDOW_STATE_SAVING_SESSION)));
-
-    xed_session_save_path_active_docs (window);
 
     file_close_all (window, TRUE);
 }

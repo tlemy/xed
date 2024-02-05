@@ -3495,6 +3495,9 @@ xed_window_init (XedWindow *window)
 
     update_sensitivity_according_to_open_tabs (window);
 
+    /* Open files from last session */
+    xed_commands_file_restore_session(window);
+
     xed_debug_message (DEBUG_WINDOW, "END");
 }
 
